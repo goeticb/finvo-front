@@ -14,6 +14,7 @@ import {
   updateInvoiceStatus,
 } from '@/services/api'
 import { INVOICE_NFT_ABI, invoiceNftAddress } from '@/contracts/invoiceNft'
+import { INVOICE_FACTORING_ABI, invoiceFactoringAddress } from '@/contracts/invoiceFactoring'
 import { useInvoicesByAddress } from '@/hooks/useInvoicesByAddress'
 import { useProfile } from '@/hooks/useProfile'
 import { ITIP20_ABI } from '@/contracts/itip20'
@@ -51,7 +52,14 @@ function parseDecimal(value: string | undefined): number {
 }
 
 function normalizeStatus(status: string): InvoiceStatus {
-  if (status === 'issued' || status === 'accepted' || status === 'disputed' || status === 'canceled' || status === 'paid') {
+  if (
+    status === 'issued' ||
+    status === 'accepted' ||
+    status === 'disputed' ||
+    status === 'canceled' ||
+    status === 'paid' ||
+    status === 'sold to Finvo'
+  ) {
     return status
   }
   return 'issued'
@@ -99,7 +107,7 @@ function mapInvoiceRecord(
 }
 
 type InvoiceType = 'issued' | 'received'
-type InvoiceStatus = 'issued' | 'accepted' | 'disputed' | 'canceled' | 'paid'
+type InvoiceStatus = 'issued' | 'accepted' | 'disputed' | 'canceled' | 'paid' | 'sold to Finvo'
 
 interface InvoiceLineItem {
   qty: number
@@ -136,6 +144,7 @@ const statusStyles: Record<InvoiceStatus, { bg: string; text: string; label: str
   disputed: { bg: 'bg-orange-100', text: 'text-orange-700', label: 'Disputed' },
   canceled: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'Canceled' },
   paid: { bg: 'bg-green-100', text: 'text-green-700', label: 'Paid' },
+  'sold to Finvo': { bg: 'bg-indigo-100', text: 'text-indigo-700', label: 'Sold to Finvo' },
 }
 
 function formatCurrency(amount: number, currency: string): string {
@@ -165,6 +174,19 @@ function toMinorUnitsFromNumber(value: number, decimals = PRICE_DECIMALS): bigin
   return toMinorUnits(fixed, decimals)
 }
 
+function InlineSpinner({ className = 'h-3 w-3' }: { className?: string }) {
+  return (
+    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+      />
+    </svg>
+  )
+}
+
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleDateString('en-GB', {
     day: '2-digit',
@@ -190,6 +212,7 @@ interface InvoiceModalProps {
 interface PayInvoiceModalProps {
   invoice: Invoice
   onClose: () => void
+  onSuccess: (message: string) => void
 }
 
 interface CreateInvoiceFormData {
@@ -207,9 +230,10 @@ interface CreateInvoiceFormData {
 interface CreateInvoiceModalProps {
   onClose: () => void
   onSubmit: (data: CreateInvoiceFormData) => void
+  onSuccess: (message: string) => void
 }
 
-function CreateInvoiceModal({ onClose, onSubmit }: CreateInvoiceModalProps) {
+function CreateInvoiceModal({ onClose, onSubmit, onSuccess }: CreateInvoiceModalProps) {
   const ROW_HEIGHT = 56
   const [formData, setFormData] = useState<CreateInvoiceFormData>({
     payer: '',
@@ -363,6 +387,7 @@ function CreateInvoiceModal({ onClose, onSubmit }: CreateInvoiceModalProps) {
         currency: formData.currency,
         items: backendItems,
       })
+      onSuccess(`You have successfully created invoice ${tokenId}.`)
       setIsSaving(false)
       onSubmit(formData)
     } catch (error) {
@@ -811,7 +836,14 @@ function CreateInvoiceModal({ onClose, onSubmit }: CreateInvoiceModalProps) {
               disabled={isPending || isSaving}
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isPending || isSaving ? 'Creating...' : 'Create Invoice'}
+              {isPending || isSaving ? (
+                <span className="flex items-center justify-center gap-2">
+                  <InlineSpinner className="h-4 w-4" />
+                  Creating...
+                </span>
+              ) : (
+                'Create Invoice'
+              )}
             </button>
             </div>
           </div>
@@ -1064,7 +1096,7 @@ function InvoiceModal({ invoice, type, onClose }: InvoiceModalProps) {
   )
 }
 
-function PayInvoiceModal({ invoice, onClose }: PayInvoiceModalProps) {
+function PayInvoiceModal({ invoice, onClose, onSuccess }: PayInvoiceModalProps) {
   const PAYMENT_OPTIONS = [
     { label: 'Finvo USD', value: 'FUSD' },
     { label: 'BetaUSD', value: 'BetaUSD' },
@@ -1158,6 +1190,7 @@ function PayInvoiceModal({ invoice, onClose }: PayInvoiceModalProps) {
 
       await updateInvoiceStatus({ invoiceId: invoice.id, status: 'paid' })
       await queryClient.invalidateQueries({ queryKey: ['invoicesByAddress'] })
+      onSuccess(`You have successfully paid invoice ${invoice.invoiceNumber}.`)
       onClose()
     } catch (error) {
       const code = (error as { code?: string }).code
@@ -1265,7 +1298,14 @@ function PayInvoiceModal({ invoice, onClose }: PayInvoiceModalProps) {
             disabled={isPaying}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isPaying ? 'Paying...' : 'Pay Invoice'}
+            {isPaying ? (
+              <span className="flex items-center justify-center gap-2">
+                <InlineSpinner className="h-4 w-4" />
+                Paying...
+              </span>
+            ) : (
+              'Pay Invoice'
+            )}
           </button>
         </div>
       </div>
@@ -1278,6 +1318,7 @@ export function InvoicingPage() {
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [payInvoice, setPayInvoice] = useState<Invoice | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [sellTooltip, setSellTooltip] = useState<{ x: number; y: number } | null>(null)
   const SELL_TOOLTIP_WIDTH = 288
   const [disputeError, setDisputeError] = useState<string | null>(null)
@@ -1288,10 +1329,18 @@ export function InvoicingPage() {
   const [acceptInvoiceId, setAcceptInvoiceId] = useState<string | null>(null)
   const { writeContractAsync: writeAcceptAsync, isPending: isAcceptPending } = useWriteContract()
   const acceptClient = usePublicClient()
+  const [isAccepting, setIsAccepting] = useState(false)
   const [cancelError, setCancelError] = useState<string | null>(null)
   const [cancelInvoiceId, setCancelInvoiceId] = useState<string | null>(null)
   const { writeContractAsync: writeCancelAsync, isPending: isCancelPending } = useWriteContract()
   const cancelClient = usePublicClient()
+  const [isCanceling, setIsCanceling] = useState(false)
+  const [sellError, setSellError] = useState<string | null>(null)
+  const [sellInvoiceId, setSellInvoiceId] = useState<string | null>(null)
+  const { writeContractAsync: writeSellAsync, isPending: isSellPending } = useWriteContract()
+  const sellClient = usePublicClient()
+  const [isSelling, setIsSelling] = useState(false)
+  const [isDisputing, setIsDisputing] = useState(false)
   const queryClient = useQueryClient()
   const {
     data: invoicesData,
@@ -1339,6 +1388,67 @@ export function InvoicingPage() {
     setShowCreateModal(false)
   }
 
+  const handleSellInvoice = async (invoice: Invoice) => {
+    setSellError(null)
+    setSellInvoiceId(invoice.id)
+    setIsSelling(true)
+
+    let tokenId: bigint
+    try {
+      tokenId = BigInt(invoice.id)
+    } catch {
+      setSellError('Invalid invoice id.')
+      setSellInvoiceId(null)
+      return
+    }
+
+    if (!sellClient) {
+      setSellError('Unable to confirm transaction.')
+      setSellInvoiceId(null)
+      return
+    }
+
+    try {
+      const approveHash = await writeSellAsync({
+        address: invoiceNftAddress,
+        abi: INVOICE_NFT_ABI,
+        functionName: 'approve',
+        args: [invoiceFactoringAddress, tokenId],
+      })
+
+      const approveReceipt = await sellClient.waitForTransactionReceipt({ hash: approveHash })
+      if (approveReceipt.status !== 'success') {
+        setSellError('Approval transaction reverted.')
+        return
+      }
+
+      const sellHash = await writeSellAsync({
+        address: invoiceFactoringAddress,
+        abi: INVOICE_FACTORING_ABI,
+        functionName: 'sellInvoice',
+        args: [tokenId],
+      })
+
+      const sellReceipt = await sellClient.waitForTransactionReceipt({ hash: sellHash })
+      if (sellReceipt.status !== 'success') {
+        setSellError('Sell transaction reverted.')
+        return
+      }
+
+      await updateInvoiceStatus({ invoiceId: invoice.id, status: 'sold to Finvo' })
+      await queryClient.invalidateQueries({ queryKey: ['invoicesByAddress'] })
+      setSuccessMessage(`You have successfully sold invoice ${invoice.invoiceNumber} to Finvo.`)
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      const message =
+        code || (error as Error)?.message || 'Failed to sell invoice.'
+      setSellError(message)
+    } finally {
+      setSellInvoiceId(null)
+      setIsSelling(false)
+    }
+  }
+
   const showSellTooltip = (target: HTMLElement) => {
     const rect = target.getBoundingClientRect()
     const centerX = rect.left + rect.width / 2
@@ -1362,6 +1472,7 @@ export function InvoicingPage() {
   const handleCancelInvoice = async (invoice: Invoice) => {
     setCancelError(null)
     setCancelInvoiceId(invoice.id)
+    setIsCanceling(true)
 
     let tokenId: bigint
     try {
@@ -1394,6 +1505,7 @@ export function InvoicingPage() {
 
       await updateInvoiceStatus({ invoiceId: invoice.id, status: 'canceled' })
       await queryClient.invalidateQueries({ queryKey: ['invoicesByAddress'] })
+      setSuccessMessage(`You have successfully canceled invoice ${invoice.invoiceNumber}.`)
     } catch (error) {
       const code = (error as { code?: string }).code
       const message =
@@ -1401,12 +1513,14 @@ export function InvoicingPage() {
       setCancelError(message)
     } finally {
       setCancelInvoiceId(null)
+      setIsCanceling(false)
     }
   }
 
   const handleAcceptInvoice = async (invoice: Invoice) => {
     setAcceptError(null)
     setAcceptInvoiceId(invoice.id)
+    setIsAccepting(true)
 
     let tokenId: bigint
     try {
@@ -1439,6 +1553,7 @@ export function InvoicingPage() {
 
       await updateInvoiceStatus({ invoiceId: invoice.id, status: 'accepted' })
       await queryClient.invalidateQueries({ queryKey: ['invoicesByAddress'] })
+      setSuccessMessage(`You have successfully accepted invoice ${invoice.invoiceNumber}.`)
     } catch (error) {
       const code = (error as { code?: string }).code
       const message =
@@ -1446,12 +1561,14 @@ export function InvoicingPage() {
       setAcceptError(message)
     } finally {
       setAcceptInvoiceId(null)
+      setIsAccepting(false)
     }
   }
 
   const handleDisputeInvoice = async (invoice: Invoice) => {
     setDisputeError(null)
     setDisputeInvoiceId(invoice.id)
+    setIsDisputing(true)
 
     let tokenId: bigint
     try {
@@ -1484,6 +1601,7 @@ export function InvoicingPage() {
 
       await updateInvoiceStatus({ invoiceId: invoice.id, status: 'disputed' })
       await queryClient.invalidateQueries({ queryKey: ['invoicesByAddress'] })
+      setSuccessMessage(`You have successfully disputed invoice ${invoice.invoiceNumber}.`)
     } catch (error) {
       const code = (error as { code?: string }).code
       const message =
@@ -1491,6 +1609,7 @@ export function InvoicingPage() {
       setDisputeError(message)
     } finally {
       setDisputeInvoiceId(null)
+      setIsDisputing(false)
     }
   }
 
@@ -1601,11 +1720,12 @@ export function InvoicingPage() {
 
       {/* Invoice List */}
       <Card>
-        {(acceptError || disputeError || cancelError) && (
+        {(acceptError || disputeError || cancelError || sellError) && (
           <div className="px-4 pt-4 text-sm text-red-600">
             {acceptError && <p>{acceptError}</p>}
             {disputeError && <p>{disputeError}</p>}
             {cancelError && <p>{cancelError}</p>}
+            {sellError && <p>{sellError}</p>}
           </div>
         )}
         {isInvoicesLoading && (
@@ -1671,24 +1791,40 @@ export function InvoicingPage() {
                                 e.stopPropagation()
                                 handleCancelInvoice(invoice)
                               }}
-                              disabled={isCancelPending && cancelInvoiceId === invoice.id}
+                              disabled={(isCancelPending || isCanceling) && cancelInvoiceId === invoice.id}
                               className="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              {isCancelPending && cancelInvoiceId === invoice.id ? 'Canceling...' : 'Cancel'}
+                              {(isCancelPending || isCanceling) && cancelInvoiceId === invoice.id ? (
+                                <span className="flex items-center justify-center gap-2">
+                                  <InlineSpinner />
+                                  Canceling...
+                                </span>
+                              ) : (
+                                'Cancel'
+                              )}
                             </button>
                           )}
                           {invoice.status === 'accepted' && activeTab === 'issued' && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
+                                handleSellInvoice(invoice)
                               }}
                               onMouseEnter={(e) => showSellTooltip(e.currentTarget)}
                               onMouseLeave={() => setSellTooltip(null)}
                               onFocus={(e) => showSellTooltip(e.currentTarget)}
                               onBlur={() => setSellTooltip(null)}
-                              className="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
+                              disabled={(isSellPending || isSelling) && sellInvoiceId === invoice.id}
+                              className="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                              Sell invoice
+                              {(isSellPending || isSelling) && sellInvoiceId === invoice.id ? (
+                                <span className="flex items-center justify-center gap-2">
+                                  <InlineSpinner />
+                                  Selling...
+                                </span>
+                              ) : (
+                                'Sell invoice'
+                              )}
                             </button>
                           )}
                           {invoice.status === 'issued' && activeTab === 'received' && (
@@ -1698,24 +1834,39 @@ export function InvoicingPage() {
                                   e.stopPropagation()
                                   handleAcceptInvoice(invoice)
                                 }}
-                                disabled={isAcceptPending && acceptInvoiceId === invoice.id}
+                                disabled={(isAcceptPending || isAccepting) && acceptInvoiceId === invoice.id}
                                 className="px-3 py-1.5 text-xs font-medium text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {isAcceptPending && acceptInvoiceId === invoice.id ? 'Accepting...' : 'Accept'}
+                                {(isAcceptPending || isAccepting) && acceptInvoiceId === invoice.id ? (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <InlineSpinner />
+                                    Accepting...
+                                  </span>
+                                ) : (
+                                  'Accept'
+                                )}
                               </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   handleDisputeInvoice(invoice)
                                 }}
-                                disabled={isDisputePending && disputeInvoiceId === invoice.id}
+                                disabled={(isDisputePending || isDisputing) && disputeInvoiceId === invoice.id}
                                 className="px-3 py-1.5 text-xs font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                               >
-                                {isDisputePending && disputeInvoiceId === invoice.id ? 'Disputing...' : 'Dispute'}
+                                {(isDisputePending || isDisputing) && disputeInvoiceId === invoice.id ? (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <InlineSpinner />
+                                    Disputing...
+                                  </span>
+                                ) : (
+                                  'Dispute'
+                                )}
                               </button>
                             </div>
                           )}
-                          {invoice.status === 'accepted' && activeTab === 'received' && (
+                          {(invoice.status === 'accepted' || invoice.status === 'sold to Finvo') &&
+                            activeTab === 'received' && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1757,6 +1908,7 @@ export function InvoicingPage() {
         <PayInvoiceModal
           invoice={payInvoice}
           onClose={() => setPayInvoice(null)}
+          onSuccess={setSuccessMessage}
         />
       )}
 
@@ -1765,6 +1917,7 @@ export function InvoicingPage() {
         <CreateInvoiceModal
           onClose={() => setShowCreateModal(false)}
           onSubmit={handleCreateInvoice}
+          onSuccess={setSuccessMessage}
         />
       )}
 
@@ -1779,6 +1932,32 @@ export function InvoicingPage() {
           }}
         >
           Instantly sell the invoice to the platform and receive 95% of the total amount in Finvo stablecoin (FUSD).
+        </div>
+      )}
+
+      {successMessage && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => setSuccessMessage(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Success</h3>
+            <p className="text-sm text-gray-600 mb-5">{successMessage}</p>
+            <button
+              onClick={() => setSuccessMessage(null)}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Done
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -247,7 +247,7 @@ export async function createInvoiceRecord(
 
 export interface UpdateInvoiceStatusPayload {
   invoiceId: string
-  status: 'issued' | 'accepted' | 'disputed' | 'canceled' | 'paid'
+  status: 'issued' | 'accepted' | 'disputed' | 'canceled' | 'paid' | 'sold to Finvo'
 }
 
 export async function updateInvoiceStatus(
